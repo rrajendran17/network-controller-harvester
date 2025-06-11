@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
@@ -20,11 +21,18 @@ import (
 )
 
 const (
-	testCnName    = "test-cn"
-	testNadConfig = "{\"cniVersion\":\"0.3.1\",\"name\":\"net1-vlan\",\"type\":\"bridge\",\"bridge\":\"test-cn-br\",\"promiscMode\":true,\"vlan\":300,\"ipam\":{}}"
-	testNadName   = "net1-vlan"
-	testVMName    = "vm1"
-	testNamespace = "test"
+	testCnName            = "test-cn"
+	testNadConfig         = "{\"cniVersion\":\"0.3.1\",\"name\":\"net1-vlan\",\"type\":\"bridge\",\"bridge\":\"test-cn-br\",\"promiscMode\":true,\"vlan\":300,\"ipam\":{}}"
+	testNadName           = "net1-vlan"
+	testVMName            = "vm1"
+	testNamespace         = "test"
+	testKubeOVNNadName    = "vswitch1"
+	testKubeOVNNamespace  = "default"
+	testKubeOVNNadConfig  = "{\"cniVersion\":\"0.3.1\",\"name\":\"vswitch1\",\"type\":\"kube-ovn\",\"server_socket\":\"/run/openvswitch/kube-ovn-daemon.sock\", \"provider\": \"vswitch1.default.ovn\"}"
+	testKubeOVNNadConfig1 = "{\"cniVersion\":\"0.3.1\",\"name\":\"vswitch1\",\"type\":\"kube-ovn\",\"server_socket\":\"/run/openvswitch/kube-ovn-daemon.sock\"}"
+	testKubeOVNNadConfig2 = "{\"cniVersion\":\"0.3.1\",\"name\":\"vswitch1\",\"type\":\"kube-ovn\",\"server_socket\":\"/run/openvswitch/kube-ovn-daemon.sock\", \"provider\": \"vswitch7.default.ovn\"}"
+	testSubnetName        = "vswitch1"
+	testSubnetNamespace   = "default"
 )
 
 func TestCreateNAD(t *testing.T) {
@@ -277,6 +285,62 @@ func TestCreateNAD(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:      "valid NAD of type kube-ovn can be created",
+			returnErr: false,
+			errKey:    "",
+			newNAD: &cniv1.NetworkAttachmentDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testKubeOVNNadName,
+					Namespace: testKubeOVNNamespace,
+				},
+				Spec: cniv1.NetworkAttachmentDefinitionSpec{
+					Config: testKubeOVNNadConfig,
+				},
+			},
+		},
+		{
+			name:      "empty provider name type kube-ovn returns error",
+			returnErr: true,
+			errKey:    "provider is empty",
+			newNAD: &cniv1.NetworkAttachmentDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testKubeOVNNadName,
+					Namespace: testKubeOVNNamespace,
+				},
+				Spec: cniv1.NetworkAttachmentDefinitionSpec{
+					Config: testKubeOVNNadConfig1,
+				},
+			},
+		},
+		{
+			name:      "invalid provider name type kube-ovn returns error",
+			returnErr: true,
+			errKey:    "invalid provider name",
+			newNAD: &cniv1.NetworkAttachmentDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testKubeOVNNadName,
+					Namespace: testKubeOVNNamespace,
+				},
+				Spec: cniv1.NetworkAttachmentDefinitionSpec{
+					Config: testKubeOVNNadConfig2,
+				},
+			},
+		},
+		{
+			name:      "invalid provider namespace type kube-ovn returns error",
+			returnErr: true,
+			errKey:    "invalid provider name",
+			newNAD: &cniv1.NetworkAttachmentDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testKubeOVNNadName,
+					Namespace: "testdefault",
+				},
+				Spec: cniv1.NetworkAttachmentDefinitionSpec{
+					Config: testKubeOVNNadConfig,
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -298,6 +362,7 @@ func TestCreateNAD(t *testing.T) {
 			cnClient := fakeclients.ClusterNetworkClient(nchclientset.NetworkV1beta1().ClusterNetworks)
 			cnCache := fakeclients.ClusterNetworkCache(nchclientset.NetworkV1beta1().ClusterNetworks)
 			vcCache := fakeclients.VlanConfigCache(nchclientset.NetworkV1beta1().VlanConfigs)
+			subnetCache := fakeclients.SubnetCache(nchclientset.KubeovnV1().Subnets)
 
 			if tc.currentVC != nil {
 				vcClient.Create(tc.currentVC)
@@ -306,7 +371,7 @@ func TestCreateNAD(t *testing.T) {
 				cnClient.Create(tc.currentCN)
 			}
 
-			validator := NewNadValidator(vmCache, vmiCache, cnCache, vcCache)
+			validator := NewNadValidator(vmCache, vmiCache, cnCache, vcCache, subnetCache)
 
 			err := validator.Create(nil, tc.newNAD)
 			assert.True(t, tc.returnErr == (err != nil))
@@ -433,6 +498,32 @@ func TestDeleteNAD(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:      "delete nad when subnet using it throws error",
+			returnErr: true,
+			errKey:    "using the nad",
+			currentNAD: &cniv1.NetworkAttachmentDefinition{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testKubeOVNNadName,
+					Namespace: testKubeOVNNamespace,
+				},
+				Spec: cniv1.NetworkAttachmentDefinitionSpec{
+					Config: testKubeOVNNadConfig,
+				},
+			},
+		},
+	}
+
+	currentSubnet := &kubeovnv1.Subnet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testSubnetName,
+			Namespace: testSubnetNamespace,
+		},
+		Spec: kubeovnv1.SubnetSpec{
+			Vpc:      "test1",
+			Protocol: "IPv4",
+			Provider: "vswitch1.default.ovn",
+		},
 	}
 
 	for _, tc := range tests {
@@ -448,7 +539,8 @@ func TestDeleteNAD(t *testing.T) {
 			vmiCache := fakeclients.VirtualMachineInstanceCache(harvesterclientset.KubevirtV1().VirtualMachineInstances)
 			cnCache := fakeclients.ClusterNetworkCache(nchclientset.NetworkV1beta1().ClusterNetworks)
 			vcCache := fakeclients.VlanConfigCache(nchclientset.NetworkV1beta1().VlanConfigs)
-			validator := NewNadValidator(vmCache, vmiCache, cnCache, vcCache)
+			subnetCache := fakeclients.SubnetCache(nchclientset.KubeovnV1().Subnets)
+			validator := NewNadValidator(vmCache, vmiCache, cnCache, vcCache, subnetCache)
 
 			if tc.currentVM != nil {
 				err := harvesterclientset.Tracker().Add(tc.currentVM)
@@ -458,6 +550,11 @@ func TestDeleteNAD(t *testing.T) {
 			if tc.currentVmi != nil {
 				err := harvesterclientset.Tracker().Add(tc.currentVmi)
 				assert.Nil(t, err, "mock resource vmi should add into fake controller tracker")
+			}
+
+			if currentSubnet != nil {
+				err := nchclientset.Tracker().Add(currentSubnet)
+				assert.Nil(t, err, "mock resource subnet should add into fake controller tracker")
 			}
 
 			err := validator.Delete(nil, tc.currentNAD)

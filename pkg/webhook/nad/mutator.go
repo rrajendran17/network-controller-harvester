@@ -100,9 +100,26 @@ func (m *Mutator) ensureLabels(nad *cniv1.NetworkAttachmentDefinition, oldConf, 
 		labels = make(map[string]string)
 	}
 
-	// Ignore untagged network because we don't need to do more operation if the last network type is untagged network
+	// Ignore untagged/overlay network because we don't need to do more operation if the last network type is untagged/overlay network
 	if oldConf.Vlan != 0 && newConf.Vlan == 0 {
 		labels[utils.KeyLastNetworkType] = string(utils.L2VlanNetwork)
+	}
+
+	if oldConf.Vlan != 0 && oldConf.Vlan != newConf.Vlan {
+		labels[utils.KeyLastVlanLabel] = strconv.Itoa(oldConf.Vlan)
+	}
+
+	if newConf.Type == utils.CNITypeKubeOVN {
+		labels[utils.KeyNetworkType] = string(utils.OverlayNetwork)
+		labels[utils.KeyNetworkReady] = utils.ValueTrue
+		labels[utils.KeyClusterNetworkLabel] = utils.ManagementClusterNetworkName
+		delete(labels, utils.KeyVlanLabel)
+		return admission.Patch{
+			admission.PatchOp{
+				Op:    admission.PatchOpReplace,
+				Path:  "/metadata/labels",
+				Value: labels,
+			}}, nil
 	}
 
 	if newConf.Vlan != 0 {
@@ -111,10 +128,6 @@ func (m *Mutator) ensureLabels(nad *cniv1.NetworkAttachmentDefinition, oldConf, 
 	} else {
 		labels[utils.KeyNetworkType] = string(utils.UntaggedNetwork)
 		delete(labels, utils.KeyVlanLabel)
-	}
-
-	if oldConf.Vlan != 0 && oldConf.Vlan != newConf.Vlan {
-		labels[utils.KeyLastVlanLabel] = strconv.Itoa(oldConf.Vlan)
 	}
 
 	cnName := newConf.BrName[:len(newConf.BrName)-len(iface.BridgeSuffix)]
@@ -188,6 +201,11 @@ func (m *Mutator) patchMTU(nad *cniv1.NetworkAttachmentDefinition) (admission.Pa
 	if err := json.Unmarshal([]byte(config), netConf); err != nil {
 		return nil, err
 	}
+
+	if netConf.Type == utils.CNITypeKubeOVN {
+		return nil, nil
+	}
+
 	clusterNetwork := netConf.BrName[:len(netConf.BrName)-len(iface.BridgeSuffix)]
 	cn, err := m.cnCache.Get(clusterNetwork)
 	if err != nil {
