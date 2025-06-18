@@ -32,7 +32,13 @@ import (
 	"github.com/harvester/harvester-network-controller/pkg/webhook/vlanconfig"
 )
 
-const name = "harvester-network-webhook"
+const (
+	name = "harvester-network-webhook"
+)
+
+var (
+	VERSION string
+)
 
 func main() {
 	var options config.Options
@@ -82,6 +88,8 @@ func main() {
 			Value:       "system:serviceaccount:kube-system:generic-garbage-collector",
 		},
 	}
+
+	logrus.Infof("Starting %v version %v", name, VERSION)
 
 	cfg, err := kubeconfig.GetNonInteractiveClientConfig(os.Getenv("KUBECONFIG")).ClientConfig()
 	if err != nil {
